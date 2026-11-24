@@ -60,7 +60,7 @@ public class SubmissionController {
 
         LocalDate deadline = ((java.sql.Date) exercises.get(0).get("deadline")).toLocalDate();
         LocalDateTime now = LocalDateTime.now();
-        boolean late = now.toLocalDate().isAfter(deadline);
+        boolean late = Grading.isLate(deadline, now);
 
         jdbcTemplate.update(
                 "INSERT INTO submission (exercise_id, student_id, content, repo_url, submitted_at) VALUES (?, ?, ?, ?, ?)",
@@ -94,12 +94,12 @@ public class SubmissionController {
         result.put("content", row.get("content"));
         result.put("repoUrl", row.get("repo_url"));
         result.put("submittedAt", submittedAt);
-        result.put("late", submittedAt.toLocalDate().isAfter(deadline));
+        result.put("late", Grading.isLate(deadline, submittedAt));
         if (row.get("raw_points") != null) {
-            double raw = ((BigDecimal) row.get("raw_points")).doubleValue();
-            double max = ((BigDecimal) row.get("max_points")).doubleValue();
+            BigDecimal raw = (BigDecimal) row.get("raw_points");
+            BigDecimal max = (BigDecimal) row.get("max_points");
             result.put("rawPoints", raw);
-            result.put("grade", Math.round(raw / max * 20 * 10) / 10.0);
+            result.put("grade", Grading.finalGrade(raw, max, deadline, submittedAt));
             result.put("feedback", row.get("feedback"));
         }
         return ResponseEntity.ok(result);
@@ -130,12 +130,14 @@ public class SubmissionController {
         jdbcTemplate.update("UPDATE submission SET raw_points = ?, feedback = ?, graded_at = now() WHERE id = ?",
                 points, feedback, id);
 
-        // grade out of 20
-        double grade = Math.round(points / max * 20 * 10) / 10.0;
-
         LocalDate deadline = ((java.sql.Date) row.get("deadline")).toLocalDate();
         LocalDateTime submittedAt = ((Timestamp) row.get("submitted_at")).toLocalDateTime();
-        boolean late = submittedAt.toLocalDate().isAfter(deadline);
+        BigDecimal displayedGrade = Grading.finalGrade(
+                BigDecimal.valueOf(points),
+                BigDecimal.valueOf(max),
+                deadline,
+                submittedAt);
+        boolean late = Grading.isLate(deadline, submittedAt);
 
         // notify the student by email
         String fullName = (String) row.get("full_name");
@@ -146,7 +148,7 @@ public class SubmissionController {
         message.setTo((String) row.get("email"));
         message.setSubject("Kilasy : nouvelle note pour " + title);
         String text = "Bonjour " + firstName + ",\n\n"
-                + "Ta note pour « " + title + " » est disponible : " + grade + "/20.\n";
+                + "Ta note pour « " + title + " » est disponible : " + displayedGrade + "/20.\n";
         if (feedback != null && !feedback.isBlank()) {
             text += "\nCommentaire de l'enseignant : " + feedback + "\n";
         }
@@ -159,7 +161,7 @@ public class SubmissionController {
         result.put("id", id);
         result.put("rawPoints", points);
         result.put("maxPoints", max);
-        result.put("grade", grade);
+        result.put("grade", displayedGrade);
         result.put("late", late);
         result.put("feedback", feedback);
         return ResponseEntity.ok(result);
